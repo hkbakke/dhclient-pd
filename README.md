@@ -26,8 +26,12 @@ If you have some interfaces configured with `inet6 manual` that you do not want
 to assign prefixes to, edit the `prefix-delegation` hook script and add one or
 more `-x INTERFACE` arguments to the dhclient-pd command to exclude those.
 
+    /usr/local/bin/dhclient-pd -x eth1.3 -x eth1.4
+
 ## Custom
 Edit the `prefix-delegation` hook script and add one or more `-i INTERFACE`
 arguments to the dhclient-pd command. `-i/--interface` is mutually exclusive
 to `-x/--exclude-interface` as the interfaces file detection logic is
 disabled if a manual list of interfaces is provided.
+
+    /usr/local/bin/dhclient-pd -i eth1.3 -i eth1.4
