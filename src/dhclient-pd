@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+
+import argparse
+import hashlib
+import json
+import logging
+import os
+import re
+import subprocess
+from functools import cached_property
+from ipaddress import IPv6Interface, IPv6Network
+from typing import Iterator, Optional
+
+
+INTERFACES_FILE = "/etc/network/interfaces"
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+class AddressGeneratorError(Exception):
+    pass
+
+
+class Interface:
+    def __init__(self, name: str, configure: bool = False):
+        self.name = name
+        self.configure = configure
+
+    @cached_property
+    def _addrs(self) -> list[IPv6Interface]:
+        addrs = []
+
+        p = subprocess.run(
+            ["ip", "-6", "-j", "addr", "show", self.name, "scope", "global"],
+            check=True,
+            capture_output=True,
+        )
+
+        for interface in json.loads(p.stdout):
+            for addr in interface["addr_info"]:
+                if addr.get("family") == "inet6":
+                    addrs.append(IPv6Interface(f'{addr["local"]}/{addr["prefixlen"]}'))
+
+        return addrs
+
+    @property
+    def addrs(self):
+        return self._addrs
+
+    def add_addr(self, addr: IPv6Interface):
+        subprocess.run(
+            ["ip", "-6", "addr", "add", addr.with_prefixlen, "dev", self.name],
+            check=True,
+        )
+
+        # Clear cache for _addrs to force a new lookup if needed
+        if hasattr(self, "_addrs"):
+            del self._addrs
+
+    def remove_addr(self, addr: IPv6Interface):
+        subprocess.run(
+            ["ip", "-6", "addr", "del", addr.with_prefixlen, "dev", self.name],
+            check=True,
+        )
+
+        # Clear cache for _addrs to force a new lookup if needed
+        if hasattr(self, "_addrs"):
+            del self._addrs
+
+
+class Prefix:
+    ADDR_PREFIXLEN = 64
+
+    def __init__(self, prefix: str):
+        self.prefix = IPv6Network(prefix)
+
+    @cached_property
+    def _subnets(self):
+        return list(self.prefix.subnets(new_prefix=self.ADDR_PREFIXLEN))
+
+    @property
+    def subnets(self):
+        return self._subnets
+
+    def get_interface_addr(self, interface: Interface) -> IPv6Interface:
+        """
+        Generate a deterministic interface address from the interface name. It
+        is done this way to ensure the existing interface prefixes are not
+        changed if additional interfaces are added or existing ones removed.
+        """
+        md5 = hashlib.md5(interface.name.encode("utf-8")).hexdigest()
+        subnet_index = int(md5, 16) % len(self.subnets)
+        subnet = self.subnets[subnet_index]
+        addr = next(subnet.hosts(), None)
+
+        if addr is None:
+            raise AddressGeneratorError(
+                f"Interface address selection for subnet {subnet} failed"
+            )
+
+        return IPv6Interface(f"{addr}/{subnet.prefixlen}")
+
+
+def get_debian_interfaces(interfaces_file: str = INTERFACES_FILE) -> Iterator[str]:
+    with open(interfaces_file, "r", encoding="utf-8") as f:
+        for line in f.readlines():
+            match = re.match(r"iface\s(.+?)\sinet6\smanual", line)
+            if match:
+                yield match.group(1)
+
+
+def get_interfaces(configure_interfaces: list[str]) -> Iterator[Interface]:
+    p = subprocess.run(
+        ["ip", "-6", "-j", "addr", "show"],
+        check=True,
+        capture_output=True,
+    )
+
+    for interface in json.loads(p.stdout):
+        for addr in interface["addr_info"]:
+            if addr["family"] == "inet6":
+                yield Interface(
+                    interface["ifname"],
+                    configure=interface["ifname"] in configure_interfaces,
+                )
+                break
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "-i",
+        "--interface",
+        metavar="NAME",
+        action="append",
+        default=[],
+        help="interface to assign prefix to",
+    )
+    group.add_argument(
+        "-x",
+        "--exclude-interface",
+        metavar="NAME",
+        action="append",
+        default=[],
+        help="manual inet6 interface to ignore in interfaces file",
+    )
+    args = parser.parse_args()
+
+    LOGGER.setLevel(logging.INFO)
+    console = logging.StreamHandler()
+    LOGGER.addHandler(console)
+
+    # These environment variables are populated by dhclient
+    reason = os.getenv("reason")
+    new_ip6_prefix = os.getenv("new_ip6_prefix")  # prefix from new lease
+    old_ip6_prefix = os.getenv("old_ip6_prefix")  # prefix from previous lease
+
+    if reason not in ["BOUND6", "EXPIRE6", "REBIND6", "REBOOT6", "RENEW6"]:
+        return
+
+    if args.interface:
+        configure_interfaces = args.interface
+    else:
+        configure_interfaces = [
+            i for i in get_debian_interfaces() if i not in args.exclude_interface
+        ]
+
+    interfaces = list(get_interfaces(configure_interfaces))
+
+    if new_ip6_prefix is not None:
+        LOGGER.info("Prefix delegation: %s", new_ip6_prefix)
+        prefix = Prefix(new_ip6_prefix)
+
+        for interface in interfaces:
+            if interface.configure:
+                addr = prefix.get_interface_addr(interface)
+                LOGGER.info("Interface %s prefix: %s", interface.name, addr.network)
+
+                if addr not in interface.addrs:
+                    LOGGER.info("Adding address %s to %s", addr, interface.name)
+                    interface.add_addr(addr)
+            else:
+                for addr in interface.addrs:
+                    if addr in prefix.prefix:
+                        LOGGER.info(
+                            "Unconfiguring address %s from interface %s",
+                            addr,
+                            interface.name,
+                        )
+                        interface.remove_addr(addr)
+
+    if old_ip6_prefix is not None and old_ip6_prefix != new_ip6_prefix:
+        LOGGER.info("Old prefix delegation: %s", new_ip6_prefix)
+        old_prefix = IPv6Network(old_ip6_prefix)
+
+        for interface in interfaces:
+            for addr in interface.addrs:
+                if addr in old_prefix:
+                    LOGGER.info("Removing old address %s from %s", addr, interface.name)
+                    interface.remove_addr(addr)
+
+
+if __name__ == "__main__":
+    main()
