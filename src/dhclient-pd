@@ -144,7 +144,7 @@ def main():
         metavar="NAME",
         action="append",
         default=[],
-        help="manual inet6 interface to ignore in interfaces file",
+        help="inet6 manual interface to ignore in interfaces file",
     )
     args = parser.parse_args()
 
