@@ -6,6 +6,13 @@ interfaces on the system. The default behaviour is to look for
 assign prefix addresses to those interfaces. However, if you are not on a
 Debian system you can provide a custom list of interfaces.
 
+## Why two scripts?
+dhclient actually sources the hook scripts, which means that the hook script
+must be valid shell script code. However working with IP addresses in shell
+scripting is both error prone and complex, so I implemented that logic in
+python instead. Python was chosen because it is nearly always available on any
+modern linux system.
+
 # Requirements
 * a modern version of python3
 
