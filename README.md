@@ -20,7 +20,9 @@ Debian system you can provide a custom list of interfaces.
 ## Debian
 Edit your `/etc/network/interfaces` file and add `iface xxx inet6 manual`
 statements for all interfaces that you want to automatically assign IPv6 prefix
-addresses to.
+addresses to, e.g.:
+
+    iface eth1.3 inet6 manual
 
 If you have some interfaces configured with `inet6 manual` that you do not want
 to assign prefixes to, edit the `prefix-delegation` hook script and add one or
