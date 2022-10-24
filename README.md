@@ -29,7 +29,7 @@ supported.
     /usr/local/bin/dhclient-pd -i eth1 -i "eth2.*"
 
 If your interface patterns also matches some interface that you do not want to
-assign interfaces to, e.g. your WAN interface, you can add one or more
+assign addresses to, e.g. your WAN interface, you can add one or more
 `-x INTERFACE` arguments to the dhclient-pd command to exclude those. Shell
 style wildcard pattern matching is supported.
 
