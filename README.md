@@ -1,10 +1,7 @@
 # dhclient-pd
 `dhclient-pd` is a Python 3 script that takes an incoming IPv6 prefix delegation
 from dhclient and assigns subnet prefix addresses to one or more additional
-interfaces on the system. The default behaviour is to look for
-`iface xxx inet6 manual` lines in `/etc/network/interfaces` and automatically
-assign prefix addresses to those interfaces. However, if you are not on a
-Debian system you can provide a custom list of interfaces.
+interfaces on the system. It also supports looback address assignments.
 
 ## Why two scripts?
 dhclient actually sources the hook scripts, which means that the hook script
@@ -24,23 +21,26 @@ modern linux system.
     sudo chmod 755 ./src/dhclient-pd /usr/local/bin/dhclient-pd
 
 # Configuration
-## Debian
-Edit your `/etc/network/interfaces` file and add `iface xxx inet6 manual`
-statements for all interfaces that you want to automatically assign IPv6 prefix
-addresses to, e.g.:
-
-    iface eth1.3 inet6 manual
-
-If you have some interfaces configured with `inet6 manual` that you do not want
-to assign prefixes to, edit the `prefix-delegation` hook script and add one or
-more `-x INTERFACE` arguments to the dhclient-pd command to exclude those.
-
-    /usr/local/bin/dhclient-pd -x eth1.3 -x eth1.4
-
-## Custom
 Edit the `prefix-delegation` hook script and add one or more `-i INTERFACE`
-arguments to the dhclient-pd command. `-i/--interface` is mutually exclusive
-to `-x/--exclude-interface` as the interfaces file detection logic is
-disabled if a manual list of interfaces is provided.
+arguments to the dhclient-pd command. Shell style wildcard pattern matching is
+supported.
 
-    /usr/local/bin/dhclient-pd -i eth1.3 -i eth1.4
+    # match eth1 and all subinterfaces of eth2
+    /usr/local/bin/dhclient-pd -i eth1 -i "eth2.*"
+
+If your interface patterns also matches some interface that you do not want to
+assign interfaces to, e.g. your WAN interface, you can add one or more
+`-x INTERFACE` arguments to the dhclient-pd command to exclude those. Shell
+style wildcard pattern matching is supported.
+
+    # match all subinterfaces starting with eth, but exclude eth2.1
+    /usr/local/bin/dhclient-pd -i "eth*.*" -x "eth2.1"
+
+There is also support for loopback addresses. These are all assigned from the
+same /64 subnet prefix, have addresses with a prefix length of /128 and you
+must provide the interface identifier, i.e. the non-prefix part of the address.
+They are always assigned to the "lo" interface.
+
+    # match all subinterfaces starting with eth, but exclude eth2.1. Also
+    # configure two loopback addresses.
+    /usr/local/bin/dhclient-pd -i "eth*.*" -x "eth2.1" -l "::1" -l "::1.1.1.1"
