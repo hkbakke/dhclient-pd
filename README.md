@@ -37,9 +37,9 @@ style wildcard pattern matching is supported.
     /usr/local/bin/dhclient-pd -i "eth*.*" -x "eth2.1"
 
 There is also support for loopback addresses. These are all assigned from the
-same /64 subnet prefix, have addresses with a prefix length of /128 and you
+same `/64` subnet prefix, have addresses with a prefix length of `/128` and you
 must provide the interface identifier, i.e. the non-prefix part of the address.
-They are always assigned to the "lo" interface.
+They are always assigned to the `lo` interface.
 
     # match all subinterfaces starting with eth, but exclude eth2.1. Also
     # configure two loopback addresses.
