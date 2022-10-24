@@ -44,3 +44,10 @@ They are always assigned to the "lo" interface.
     # match all subinterfaces starting with eth, but exclude eth2.1. Also
     # configure two loopback addresses.
     /usr/local/bin/dhclient-pd -i "eth*.*" -x "eth2.1" -l "::1" -l "::1.1.1.1"
+
+# Manual execution
+If you want to troubleshoot or test you can execute the script manually by
+providing the minimum set of environment variables. Set `new_ip6_prefix` to
+your own delegated prefix.
+
+    reason=REBIND6 new_ip6_prefix="ab12:cd34:ef56::/48" dhclient-pd -i "enp4s0f*.*" -x enp4s0f0.2 -l ::1 -l ::2
