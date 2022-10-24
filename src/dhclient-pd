@@ -103,6 +103,7 @@ class Prefix:
 
     def __init__(self, prefix: str):
         self.prefix = IPv6Network(prefix)
+        self._assigned: list[int] = []
 
     @cached_property
     def _subnets(self) -> list[IPv6Network]:
@@ -118,8 +119,16 @@ class Prefix:
         is done this way to ensure the existing interface prefixes are not
         changed if additional interfaces are added or existing ones removed.
         """
-        md5 = hashlib.md5(interface.encode("utf-8")).hexdigest()
-        subnet_index = int(md5, 16) % len(self.subnets)
+        name_hash = hashlib.sha256(interface.encode("utf-8")).hexdigest()
+        subnet_count = len(self.subnets)
+        subnet_index = int(name_hash, 16) % subnet_count
+
+        # In the unlikely event that we get a name hash subnet collition,
+        # iterate over the available prefixes until an unused prefix is found.
+        while subnet_index in self._assigned:
+            subnet_index = (subnet_index + 1) % subnet_count
+
+        self._assigned.append(subnet_index)
         return self.subnets[subnet_index]
 
     def add(self, interfaces: list[Interface]) -> None:
