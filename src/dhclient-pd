@@ -225,12 +225,12 @@ def main():
             interface.loopback = True
 
     if new_ip6_prefix is not None:
-        LOGGER.info("Prefix delegation: %s", new_ip6_prefix)
+        LOGGER.info("Delegated prefix: %s", new_ip6_prefix)
         prefix = Prefix(new_ip6_prefix)
         prefix.add(interfaces)
 
     if old_ip6_prefix is not None and old_ip6_prefix != new_ip6_prefix:
-        LOGGER.info("Old prefix delegation: %s", old_ip6_prefix)
+        LOGGER.info("Old prefix: %s", old_ip6_prefix)
         prefix = Prefix(old_ip6_prefix)
         prefix.remove(interfaces)
 
