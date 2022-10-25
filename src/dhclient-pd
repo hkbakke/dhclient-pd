@@ -13,6 +13,7 @@ from typing import Iterator, Optional
 
 
 LOOPBACK_INTERFACE = "lo"
+REASONS = ["BOUND6", "EXPIRE6", "REBIND6", "REBOOT6", "RENEW6"]
 
 
 LOGGER = logging.getLogger(__name__)
@@ -178,7 +179,7 @@ def main():
         metavar="NAME",
         action="append",
         default=[],
-        help="interface to assign prefix to",
+        help="interfaces to assign prefix to",
     )
     parser.add_argument(
         "-l",
@@ -207,7 +208,7 @@ def main():
     new_ip6_prefix = os.getenv("new_ip6_prefix")  # prefix from new lease
     old_ip6_prefix = os.getenv("old_ip6_prefix")  # prefix from previous lease
 
-    if reason not in ["BOUND6", "EXPIRE6", "REBIND6", "REBOOT6", "RENEW6"]:
+    if reason not in REASONS:
         return
 
     interfaces = list(get_interfaces())
