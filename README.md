@@ -1,7 +1,18 @@
 # dhclient-pd
 `dhclient-pd` is a Python 3 script that takes an incoming IPv6 prefix delegation
 from dhclient and assigns subnet prefix addresses to one or more additional
-interfaces on the system. It also supports looback address assignments.
+interfaces on the system.
+
+## Main features
+* Shell style wildcard matching of interface names provides support for
+  virtually unlimited interfaces with almost zero config
+* Deterministic subnet prefixes based on interface name hashes to guarantee
+  that the addresses do not change if the number of interfaces changes as long
+  as the interface name is the same.
+* Proper removal of the assigned address if you remove an interface from
+  management
+* Loopback address configuration. Assign `/128` addresses from a single `/64`
+  prefix.
 
 ## Why two scripts?
 dhclient actually sources the hook scripts, which means that the hook script
