@@ -1,6 +1,6 @@
 # dhclient-pd
 `dhclient-pd` is a Python 3 script that takes an incoming IPv6 prefix delegation
-from dhclient and assigns subnet prefix addresses to one or more additional
+from `dhclient` and assigns subnet prefix addresses to one or more additional
 interfaces on the system.
 
 ## Main features
