@@ -229,12 +229,12 @@ def main():
             interface.identifiers = args.loopback
             interface.loopback = True
 
-    if args.prefix is not None:
+    if args.prefix:
         LOGGER.info("Delegated prefix: %s", args.prefix)
         prefix = Prefix(args.prefix)
         prefix.add(interfaces)
 
-    if args.old_prefix is not None and args.old_prefix != args.prefix:
+    if args.old_prefix and args.old_prefix != args.prefix:
         LOGGER.info("Old prefix: %s", args.old_prefix)
         prefix = Prefix(args.old_prefix)
         prefix.remove(interfaces)
