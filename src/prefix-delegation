@@ -1,1 +1,7 @@
-/usr/local/bin/dhclient-pd
+case $reason in
+    BOUND6|EXPIRE6|REBIND6|REBOOT6|RENEW6)
+        /usr/local/bin/dhclient-pd \
+            -p $new_ip6_prefix \
+            -o $old_ip6_prefix
+        ;;
+esac

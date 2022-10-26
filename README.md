@@ -37,7 +37,11 @@ arguments to the dhclient-pd command. Shell style wildcard pattern matching is
 supported.
 
     # match eth1 and all subinterfaces of eth2
-    /usr/local/bin/dhclient-pd -i eth1 -i "eth2.*"
+    /usr/local/bin/dhclient-pd \
+        -p $new_ip6_prefix \
+        -o $old_ip6_prefix \
+        -i eth1 \
+        -i "eth2.*"
 
 If your interface patterns also matches some interface that you do not want to
 assign addresses to, e.g. your WAN interface, you can add one or more
@@ -45,7 +49,11 @@ assign addresses to, e.g. your WAN interface, you can add one or more
 style wildcard pattern matching is supported.
 
     # match all subinterfaces starting with eth, but exclude eth2.1
-    /usr/local/bin/dhclient-pd -i "eth*.*" -x "eth2.1"
+    /usr/local/bin/dhclient-pd \
+        -p $new_ip6_prefix \
+        -o $old_ip6_prefix \
+        -i "eth*.*" \
+        -x eth2.1
 
 There is also support for loopback addresses. These are all assigned from the
 same `/64` subnet prefix, have addresses with a prefix length of `/128` and you
@@ -54,11 +62,10 @@ They are always assigned to the `lo` interface.
 
     # match all subinterfaces starting with eth, but exclude eth2.1. Also
     # configure two loopback addresses.
-    /usr/local/bin/dhclient-pd -i "eth*.*" -x "eth2.1" -l "::1" -l "::1.1.1.1"
-
-# Manual execution
-If you want to troubleshoot or test you can execute the script manually by
-providing the minimum set of environment variables. Set `new_ip6_prefix` to
-your own delegated prefix.
-
-    reason=REBIND6 new_ip6_prefix="ab12:cd34:ef56::/48" dhclient-pd -i "enp4s0f*.*" -x enp4s0f0.2 -l ::1 -l ::2
+    /usr/local/bin/dhclient-pd \
+        -p $new_ip6_prefix \
+        -o $old_ip6_prefix \
+        -i "eth*.*" \
+        -x eth2.1 \
+        -l ::1 \
+        -l ::1.1.1.1

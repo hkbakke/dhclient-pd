@@ -13,7 +13,6 @@ from typing import Iterator, Optional
 
 
 LOOPBACK_INTERFACE = "lo"
-REASONS = ["BOUND6", "EXPIRE6", "REBIND6", "REBOOT6", "RENEW6"]
 
 
 LOGGER = logging.getLogger(__name__)
@@ -197,19 +196,25 @@ def main():
         default=[],
         help="interfaces to always ignore",
     )
+    parser.add_argument(
+        "-p",
+        "--prefix",
+        metavar="PREFIX",
+        nargs="?",
+        help="prefix to add",
+    )
+    parser.add_argument(
+        "-o",
+        "--old-prefix",
+        metavar="PREFIX",
+        nargs="?",
+        help="prefix to remove",
+    )
     args = parser.parse_args()
 
     LOGGER.setLevel(logging.INFO)
     console = logging.StreamHandler()
     LOGGER.addHandler(console)
-
-    # These environment variables are populated by dhclient
-    reason = os.getenv("reason")
-    new_ip6_prefix = os.getenv("new_ip6_prefix")  # prefix from new lease
-    old_ip6_prefix = os.getenv("old_ip6_prefix")  # prefix from previous lease
-
-    if reason not in REASONS:
-        return
 
     interfaces = list(get_interfaces())
 
@@ -224,14 +229,14 @@ def main():
             interface.identifiers = args.loopback
             interface.loopback = True
 
-    if new_ip6_prefix is not None:
-        LOGGER.info("Delegated prefix: %s", new_ip6_prefix)
-        prefix = Prefix(new_ip6_prefix)
+    if args.prefix is not None:
+        LOGGER.info("Delegated prefix: %s", args.prefix)
+        prefix = Prefix(args.prefix)
         prefix.add(interfaces)
 
-    if old_ip6_prefix is not None and old_ip6_prefix != new_ip6_prefix:
-        LOGGER.info("Old prefix: %s", old_ip6_prefix)
-        prefix = Prefix(old_ip6_prefix)
+    if args.old_prefix is not None and args.old_prefix != args.prefix:
+        LOGGER.info("Old prefix: %s", args.old_prefix)
+        prefix = Prefix(args.old_prefix)
         prefix.remove(interfaces)
 
 
