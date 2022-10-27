@@ -1,39 +1,51 @@
 #!/usr/bin/env python3
 
 import argparse
-import fnmatch
 import hashlib
 import json
 import logging
-import os
 import subprocess
+import sys
 from functools import cached_property
 from ipaddress import IPv6Address, IPv6Network, IPv6Interface
-from typing import Iterator, Optional
+from typing import Optional
 
 
 LOOPBACK_INTERFACE = "lo"
+INTERFACES_CONFIG = "/etc/dhclient-pd/interfaces.json"
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+class SubnetAllocationError(Exception):
+    pass
 
 
 class Interface:
     def __init__(
         self,
         name: str,
-        configure: bool = False,
+        prefix_id: Optional[str] = None,
+        interface_ids: list[str] = None,
         loopback: bool = False,
-        identifiers: Optional[list[str]] = None,
     ):
         self.name = name
-        self.configure = configure
         self.loopback = loopback
 
-        if identifiers is None:
-            self.identifiers = ["::1"]
+        if interface_ids is None:
+            self.interface_ids = ["::1"]
         else:
-            self.identifiers = identifiers
+            self.interface_ids = interface_ids
+
+        if prefix_id is None:
+            # Generate a deterministic prefix id from the interface name. It
+            # is done this way to ensure the existing interface prefixes are
+            # not changed if additional interfaces are added or existing ones
+            # removed.
+            self.prefix_id = hashlib.sha256(name.encode("utf-8")).hexdigest()
+        else:
+            self.prefix_id = prefix_id
 
     @cached_property
     def _addrs(self) -> list[IPv6Interface]:
@@ -83,14 +95,27 @@ class Interface:
             del self._addrs
 
     def add_prefix(self, prefix: IPv6Network) -> None:
-        if self.loopback:
-            prefixlen = 128
-        else:
-            prefixlen = prefix.prefixlen
+        valid_addrs = set()
 
-        for identifier in self.identifiers:
-            addr = prefix.network_address + int(IPv6Address(identifier))
-            self.add_addr(IPv6Interface(f"{addr}/{prefixlen}"))
+        for interface_id in self.interface_ids:
+            addr = prefix.network_address + int(IPv6Address(interface_id))
+
+            if self.loopback:
+                prefix_length = 128
+            else:
+                prefix_length = prefix.prefixlen
+
+            interface_addr = IPv6Interface(f"{addr}/{prefix_length}")
+            self.add_addr(interface_addr)
+            valid_addrs.add(interface_addr)
+
+        # Clean up any remaining address assigments in this prefix. This
+        # typically happens if you previously have assigned multiple
+        # interface_ids for an interface and then remove one of them from the
+        # list while not unmanaging the entire interface.
+        for addr in self.addrs:
+            if addr in prefix and addr not in valid_addrs:
+                self.remove_addr(addr)
 
     def remove_prefix(self, prefix: IPv6Network) -> None:
         for addr in self.addrs:
@@ -103,7 +128,7 @@ class Prefix:
 
     def __init__(self, prefix: str):
         self.prefix = IPv6Network(prefix)
-        self._assigned: list[int] = []
+        self._assigned: set[int] = set()
 
     @cached_property
     def _subnets(self) -> list[IPv6Network]:
@@ -113,121 +138,70 @@ class Prefix:
     def subnets(self) -> list[IPv6Network]:
         return self._subnets
 
-    def _get_subnet_prefix(self, interface: str) -> IPv6Network:
-        """
-        Generate a deterministic interface prefix from the interface name. It
-        is done this way to ensure the existing interface prefixes are not
-        changed if additional interfaces are added or existing ones removed.
-        """
-        name_hash = hashlib.sha256(interface.encode("utf-8")).hexdigest()
+    @cached_property
+    def _all_interfaces(self) -> set[str]:
+        interfaces = set()
+
+        p = subprocess.run(
+            ["ip", "-6", "-j", "addr", "show"],
+            check=True,
+            capture_output=True,
+        )
+
+        for interface in json.loads(p.stdout):
+            for addr in interface["addr_info"]:
+                if addr["family"] == "inet6":
+                    interfaces.add(interface["ifname"])
+                break
+
+        return interfaces
+
+    @property
+    def all_interfaces(self) -> set[str]:
+        return self._all_interfaces
+
+    def _get_subnet(self, interface: Interface) -> IPv6Network:
         subnet_count = len(self.subnets)
-        subnet_index = int(name_hash, 16) % subnet_count
+        subnet_index = int(interface.prefix_id, 16) % subnet_count
 
-        # In the unlikely event that we get a name hash subnet collition,
-        # iterate over the available prefixes until an unused prefix is found.
-        while subnet_index in self._assigned:
+        # If we get a prefix_id subnet collision iterate over the available
+        # prefixes until an unused prefix is found.
+        max_tries = subnet_count - len(self._assigned)
+        tries = 0
+        while tries <= max_tries:
+            if subnet_index not in self._assigned:
+                break
             subnet_index = (subnet_index + 1) % subnet_count
+            tries += 1
+        else:
+            raise SubnetAllocationError(
+                f"Could not find a free subnet to allocate to {interface.name}"
+            )
 
-        self._assigned.append(subnet_index)
+        self._assigned.add(subnet_index)
         return self.subnets[subnet_index]
 
     def add(self, interfaces: list[Interface]) -> None:
+        configured_interfaces = set()
+
         for interface in interfaces:
-            if interface.configure:
-                subnet = self._get_subnet_prefix(interface.name)
-                interface.add_prefix(subnet)
-            else:
-                interface.remove_prefix(self.prefix)
+            subnet = self._get_subnet(interface)
+            interface.add_prefix(subnet)
+            configured_interfaces.add(interface.name)
 
-    def remove(self, interfaces: list[Interface]) -> None:
-        for interface in interfaces:
-            interface.remove_prefix(self.prefix)
+        for other_interface in self.all_interfaces - configured_interfaces:
+            Interface(name=other_interface).remove_prefix(self.prefix)
 
-
-def interface_match(name: str, patterns: list[str]) -> bool:
-    for pattern in patterns:
-        if fnmatch.fnmatch(name, pattern):
-            return True
-
-    return False
+    def remove(self) -> None:
+        for interface in self.all_interfaces:
+            Interface(name=interface).remove_prefix(self.prefix)
 
 
-def get_interfaces() -> Iterator[Interface]:
-    p = subprocess.run(
-        ["ip", "-6", "-j", "addr", "show"],
-        check=True,
-        capture_output=True,
-    )
+def config_cmd(args):
+    with open(args.config, "r", encoding="utf-8") as f:
+        config = json.load(f)
 
-    for interface in json.loads(p.stdout):
-        for addr in interface["addr_info"]:
-            if addr["family"] != "inet6":
-                continue
-
-            yield Interface(
-                interface["ifname"],
-            )
-            break
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-i",
-        "--interface",
-        metavar="NAME",
-        action="append",
-        default=[],
-        help="interfaces to assign prefix to",
-    )
-    parser.add_argument(
-        "-l",
-        "--loopback",
-        metavar="IDENTIFIER",
-        action="append",
-        default=[],
-        help="assign loopback address (prefix:identifier/128)",
-    )
-    parser.add_argument(
-        "-x",
-        "--exclude-interface",
-        metavar="NAME",
-        action="append",
-        default=[],
-        help="interfaces to always ignore",
-    )
-    parser.add_argument(
-        "-p",
-        "--prefix",
-        metavar="PREFIX",
-        nargs="?",
-        help="prefix to add",
-    )
-    parser.add_argument(
-        "-o",
-        "--old-prefix",
-        metavar="PREFIX",
-        nargs="?",
-        help="prefix to remove",
-    )
-    args = parser.parse_args()
-
-    LOGGER.setLevel(logging.INFO)
-    console = logging.StreamHandler()
-    LOGGER.addHandler(console)
-
-    interfaces = list(get_interfaces())
-
-    for interface in interfaces:
-        if interface_match(interface.name, args.interface) and not interface_match(
-            interface.name, args.exclude_interface
-        ):
-            interface.configure = True
-
-        if args.loopback and interface.name == LOOPBACK_INTERFACE:
-            interface.configure = True
-            interface.identifiers = args.loopback
-            interface.loopback = True
+    interfaces = [Interface(**i) for i in config]
 
     if args.prefix:
         LOGGER.info("Delegated prefix: %s", args.prefix)
@@ -237,7 +211,54 @@ def main():
     if args.old_prefix and args.old_prefix != args.prefix:
         LOGGER.info("Old prefix: %s", args.old_prefix)
         prefix = Prefix(args.old_prefix)
-        prefix.remove(interfaces)
+        prefix.remove()
+
+
+def show_cmd(args):
+    with open(args.config, "r", encoding="utf-8") as f:
+        config = json.load(f)
+        json.dump(config, sys.stdout, indent=4)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-c",
+        "--config",
+        metavar="FILENAME",
+        default=INTERFACES_CONFIG,
+        help="interfaces config file",
+    )
+    subparsers = parser.add_subparsers()
+
+    # config subcommand
+    config_cmd_parser = subparsers.add_parser("config")
+    config_cmd_parser.set_defaults(func=config_cmd)
+    config_cmd_parser.add_argument(
+        "-p",
+        "--prefix",
+        metavar="PREFIX",
+        nargs="?",
+        help="prefix to add",
+    )
+    config_cmd_parser.add_argument(
+        "-o",
+        "--old-prefix",
+        metavar="PREFIX",
+        nargs="?",
+        help="prefix to remove",
+    )
+
+    # show subcommand
+    show_cmd_parser = subparsers.add_parser("show")
+    show_cmd_parser.set_defaults(func=show_cmd)
+    args = parser.parse_args()
+
+    LOGGER.setLevel(logging.INFO)
+    console = logging.StreamHandler()
+    LOGGER.addHandler(console)
+
+    args.func(args)
 
 
 if __name__ == "__main__":

@@ -30,42 +30,61 @@ modern linux system.
     sudo chmod 644 /etc/dhcp/dhclient-exit-hooks.d/prefix-delegation
     sudo cp ./src/dhclient-pd /usr/local/bin/dhclient-pd
     sudo chmod 755 ./src/dhclient-pd /usr/local/bin/dhclient-pd
+    sudo mkdir /etc/dhclient-pd
 
 # Configuration
-Edit the `prefix-delegation` hook script and add one or more `-i INTERFACE`
-arguments to the dhclient-pd command. Shell style wildcard pattern matching is
-supported.
+Create `/etc/dhclient-pd/interfaces.json`. Example syntax:
 
-    # match eth1 and all subinterfaces of eth2
-    /usr/local/bin/dhclient-pd \
-        -p $new_ip6_prefix \
-        -o $old_ip6_prefix \
-        -i eth1 \
-        -i "eth2.*"
+    [
+        {
+            "name": "enp4s0f0.3",
+            "prefix_id": "3"
+        },
+        {
+            "name": "enp4s0f1.4",
+            "prefix_id": "4"
+        },
+        {
+            "name": "enp4s0f1.5",
+            "prefix_id": "af1"
+        },
+        {
+            "name": "enp4s0f1.6",
+            "prefix_id": "6"
+        },
+        {
+            "interface_ids": [
+                "::1",
+                "::3"
+            ],
+            "loopback": true,
+            "name": "lo",
+            "prefix_id": "0"
+        }
+    ]
 
-If your interface patterns also matches some interface that you do not want to
-assign addresses to, e.g. your WAN interface, you can add one or more
-`-x INTERFACE` arguments to the dhclient-pd command to exclude those. Shell
-style wildcard pattern matching is supported.
+The only mandatory key is `name`. A deterministic `prefix_id` based on a hash
+of the interface name will be generated for you if you don't set one.
+`interface_ids` is set to `["::1"]` by default unless overriden. You may define
+multiple `interface_ids` within the same prefix.
+If you want to have multiple different prefixes on the same interface, just add
+another configuration block for that interface with an unique `prefix_id` or
+let the `prefix_id` be dynamically assigned.
+If `loopback` is true a `/128` prefix length is used instead of the standard
+`/64`.
 
-    # match all subinterfaces starting with eth, but exclude eth2.1
-    /usr/local/bin/dhclient-pd \
-        -p $new_ip6_prefix \
-        -o $old_ip6_prefix \
-        -i "eth*.*" \
-        -x eth2.1
+# Manual execution
+You are not bound to dhclient. The hook script manages all the dhclient
+specifics. `dhclient-pd` is a standalone tool that may be called from any
+source. Typically you would call it manually with:
 
-There is also support for loopback addresses. These are all assigned from the
-same `/64` subnet prefix, have addresses with a prefix length of `/128` and you
-must provide the interface identifier, i.e. the non-prefix part of the address.
-They are always assigned to the `lo` interface.
+    dhclient-pd config -p $prefix [-o $old_prefix]
 
-    # match all subinterfaces starting with eth, but exclude eth2.1. Also
-    # configure two loopback addresses.
-    /usr/local/bin/dhclient-pd \
-        -p $new_ip6_prefix \
-        -o $old_ip6_prefix \
-        -i "eth*.*" \
-        -x eth2.1 \
-        -l ::1 \
-        -l ::1.1.1.1
+You must replace `$prefix` with your actual delegated prefix.
+
+If you run `config` without any prefix options nothing will happen as
+`dhclient-pd` then doesn't know which prefixes to manage.
+
+If you just want to quickly show the configuration:
+
+    dhclient-pd show
