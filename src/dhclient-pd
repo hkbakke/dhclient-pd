@@ -11,7 +11,6 @@ from ipaddress import IPv6Address, IPv6Network, IPv6Interface
 from typing import Optional
 
 
-LOOPBACK_INTERFACE = "lo"
 INTERFACES_CONFIG = "/etc/dhclient-pd/interfaces.json"
 
 
