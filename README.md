@@ -1,7 +1,8 @@
 # dhclient-pd
-`dhclient-pd` is a Python 3 script that takes an incoming IPv6 prefix delegation
-from `dhclient` and assigns subnet prefix addresses to one or more additional
-interfaces on the system.
+`dhclient-pd` is a script that takes an incoming IPv6 prefix delegation from
+`dhclient` and assigns subnet prefix addresses to one or more additional
+interfaces on the system. It is also a standalone tool that may be called from
+any source, not just `dhclient`. Only the hook script is `dhclient` specific.
 
 ## Why two scripts?
 dhclient actually sources the hook scripts, which means that the hook script
