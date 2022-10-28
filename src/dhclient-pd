@@ -8,7 +8,7 @@ import subprocess
 import sys
 from functools import cached_property
 from ipaddress import IPv6Address, IPv6Network, IPv6Interface
-from typing import Optional
+from typing import Iterator, Optional
 
 
 INTERFACES_CONFIG = "/etc/dhclient-pd/interfaces.json"
@@ -17,34 +17,13 @@ INTERFACES_CONFIG = "/etc/dhclient-pd/interfaces.json"
 LOGGER = logging.getLogger(__name__)
 
 
-class SubnetAllocationError(Exception):
+class PrefixError(Exception):
     pass
 
 
 class Interface:
-    def __init__(
-        self,
-        name: str,
-        prefix_id: Optional[str] = None,
-        interface_ids: list[str] = None,
-        loopback: bool = False,
-    ):
+    def __init__(self, name: str):
         self.name = name
-        self.loopback = loopback
-
-        if interface_ids is None:
-            self.interface_ids = ["::1"]
-        else:
-            self.interface_ids = interface_ids
-
-        if prefix_id is None:
-            # Generate a deterministic prefix id from the interface name. It
-            # is done this way to ensure the existing interface prefixes are
-            # not changed if additional interfaces are added or existing ones
-            # removed.
-            self.prefix_id = hashlib.sha256(name.encode("utf-8")).hexdigest()
-        else:
-            self.prefix_id = prefix_id
 
     @cached_property
     def _addrs(self) -> list[IPv6Interface]:
@@ -93,124 +72,122 @@ class Interface:
         if hasattr(self, "_addrs"):
             del self._addrs
 
-    def add_prefix(self, prefix: IPv6Network) -> None:
-        valid_addrs = set()
 
-        for interface_id in self.interface_ids:
-            addr = prefix.network_address + int(IPv6Address(interface_id))
-
-            if self.loopback:
-                prefix_length = 128
-            else:
-                prefix_length = prefix.prefixlen
-
-            interface_addr = IPv6Interface(f"{addr}/{prefix_length}")
-            self.add_addr(interface_addr)
-            valid_addrs.add(interface_addr)
-
-        # Clean up any remaining address assigments in this prefix. This
-        # typically happens if you previously have assigned multiple
-        # interface_ids for an interface and then remove one of them from the
-        # list while not unmanaging the entire interface.
-        for addr in self.addrs:
-            if addr in prefix and addr not in valid_addrs:
-                self.remove_addr(addr)
-
-    def remove_prefix(self, prefix: IPv6Network) -> None:
-        for addr in self.addrs:
-            if addr in prefix:
-                self.remove_addr(addr)
-
-
-class Prefix:
-    ADDR_PREFIXLEN = 64
+class DelegatedPrefix:
+    PREFIXLEN = 64
 
     def __init__(self, prefix: str):
-        self.prefix = IPv6Network(prefix)
-        self._assigned: set[int] = set()
+        self.network = IPv6Network(prefix)
+        self._assigned_prefixes: set[int] = set()
 
-    @cached_property
-    def _subnets(self) -> list[IPv6Network]:
-        return list(self.prefix.subnets(new_prefix=self.ADDR_PREFIXLEN))
+    def get_prefix(self, prefix_id: str, prefix_length: int) -> IPv6Network:
+        prefix_index = int(prefix_id, 16)
 
-    @property
-    def subnets(self) -> list[IPv6Network]:
-        return self._subnets
+        if prefix_index in self._assigned_prefixes:
+            raise PrefixError(f"The prefix id {prefix_index:x} is already assigned")
 
-    @cached_property
-    def _all_interfaces(self) -> set[str]:
-        interfaces = set()
-
-        p = subprocess.run(
-            ["ip", "-6", "-j", "addr", "show"],
-            check=True,
-            capture_output=True,
+        self._assigned_prefixes.add(prefix_index)
+        prefix_address = self.network.network_address + int(
+            IPv6Address(f"0:0:0:{prefix_index:x}::")
         )
+        prefix_network = IPv6Network(f"{prefix_address}/{prefix_length}")
 
-        for interface in json.loads(p.stdout):
-            for addr in interface["addr_info"]:
-                if addr["family"] == "inet6":
-                    interfaces.add(interface["ifname"])
-                break
-
-        return interfaces
-
-    @property
-    def all_interfaces(self) -> set[str]:
-        return self._all_interfaces
-
-    def _get_subnet(self, interface: Interface) -> IPv6Network:
-        subnet_count = len(self.subnets)
-        subnet_index = int(interface.prefix_id, 16) % subnet_count
-
-        # If we get a prefix_id subnet collision iterate over the available
-        # prefixes until an unused prefix is found.
-        max_tries = subnet_count - len(self._assigned)
-        tries = 0
-        while tries <= max_tries:
-            if subnet_index not in self._assigned:
-                break
-            subnet_index = (subnet_index + 1) % subnet_count
-            tries += 1
-        else:
-            raise SubnetAllocationError(
-                f"Could not find a free subnet to allocate to {interface.name}"
+        if not prefix_network.subnet_of(self.network):
+            raise PrefixError(
+                f"The prefix id {prefix_index:x} does not fit within the delegated prefix"
             )
 
-        self._assigned.add(subnet_index)
-        return self.subnets[subnet_index]
+        return prefix_network
 
-    def add(self, interfaces: list[Interface]) -> None:
-        configured_interfaces = set()
+    def get_prefix_address(
+        self, prefix: IPv6Network, interface_id: str
+    ) -> IPv6Interface:
+        addr = prefix.network_address + int(IPv6Address(interface_id))
+        return IPv6Interface(f"{addr}/{prefix.prefixlen}")
 
-        for interface in interfaces:
-            subnet = self._get_subnet(interface)
-            interface.add_prefix(subnet)
-            configured_interfaces.add(interface.name)
+    def get_prefix_addresses(
+        self, prefix_id: str, prefix_length: int, interface_ids: list[str]
+    ) -> Iterator[IPv6Interface]:
+        prefix = self.get_prefix(prefix_id, prefix_length)
+        for interface_id in interface_ids:
+            yield self.get_prefix_address(prefix, interface_id)
 
-        for other_interface in self.all_interfaces - configured_interfaces:
-            Interface(name=other_interface).remove_prefix(self.prefix)
 
-    def remove(self) -> None:
-        for interface in self.all_interfaces:
-            Interface(name=interface).remove_prefix(self.prefix)
+class PrefixConfig:
+    def __init__(
+        self,
+        name: str,
+        prefix_id: str,
+        prefix_length: Optional[int] = None,
+        interface_ids: Optional[list[str]] = None,
+    ):
+        self.name = name
+        self.prefix_id = prefix_id
+
+        if prefix_length is None:
+            self.prefix_length = 64
+        else:
+            self.prefix_length = prefix_length
+
+        if interface_ids is None:
+            self.interface_ids = ["::1"]
+        else:
+            self.interface_ids = interface_ids
+
+
+def get_interfaces() -> Iterator[Interface]:
+    p = subprocess.run(
+        ["ip", "-6", "-j", "addr", "show"],
+        check=True,
+        capture_output=True,
+    )
+
+    for interface in json.loads(p.stdout):
+        for addr in interface["addr_info"]:
+            if addr["family"] == "inet6":
+                yield Interface(interface["ifname"])
+            break
 
 
 def config_cmd(args):
     with open(args.config, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    interfaces = [Interface(**i) for i in config]
+    interfaces: dict[str, Interface] = {}
+
+    for interface in get_interfaces():
+        interfaces[interface.name] = interface
 
     if args.prefix:
         LOGGER.info("Delegated prefix: %s", args.prefix)
-        prefix = Prefix(args.prefix)
-        prefix.add(interfaces)
+        prefix = DelegatedPrefix(args.prefix)
+        addrs_added: set[str] = set()
+
+        for item in config:
+            prefix_cfg = PrefixConfig(**item)
+            interface = interfaces[prefix_cfg.name]
+
+            for addr in prefix.get_prefix_addresses(
+                prefix_cfg.prefix_id,
+                prefix_cfg.prefix_length,
+                prefix_cfg.interface_ids,
+            ):
+                interface.add_addr(addr)
+                addrs_added.add(str(addr))
+
+        for _, interface in interfaces.items():
+            for addr in interface.addrs:
+                if str(addr) not in addrs_added and addr in prefix.network:
+                    interface.remove_addr(addr)
 
     if args.old_prefix and args.old_prefix != args.prefix:
         LOGGER.info("Old prefix: %s", args.old_prefix)
-        prefix = Prefix(args.old_prefix)
-        prefix.remove()
+        prefix = DelegatedPrefix(args.old_prefix)
+
+        for _, interface in interfaces.items():
+            for addr in interface.addrs:
+                if addr in prefix.network:
+                    interface.remove_addr(addr)
 
 
 def show_cmd(args):

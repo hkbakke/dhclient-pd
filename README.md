@@ -47,21 +47,20 @@ Create `/etc/dhclient-pd/interfaces.json`. Example syntax:
                 "::1",
                 "::3"
             ],
-            "loopback": true,
             "name": "lo",
             "prefix_id": "0"
+            "prefix_length: 128
         }
     ]
 
-The only mandatory key is `name`. A deterministic `prefix_id` based on a hash
-of the interface name will be generated for you if you don't set one.
+`name` and `prefix_id` are mandatory. Note that `prefix_id` is a string
+containing the hex representation of the id, so the value needs to be quoted to
+avoid being interpreted as an integer if there are no letters in the id.
 `interface_ids` is set to `["::1"]` by default unless overriden. You may define
-multiple `interface_ids` within the same prefix.
-If you want to have multiple different prefixes on the same interface, just add
-another configuration block for that interface with an unique `prefix_id` or
-let the `prefix_id` be dynamically assigned.
-If `loopback` is true a `/128` prefix length is used instead of the standard
-`/64`.
+multiple `interface_ids` within the same prefix, which is normally useful only
+for loopback addresses (/128). If you want to have multiple different prefixes
+on the same interface, just add another configuration block for that interface
+with an unique `prefix_id`.
 
 # Manual execution
 You are not bound to dhclient. The hook script manages all the dhclient
@@ -75,6 +74,6 @@ You must replace `$prefix` with your actual delegated prefix.
 If you run `config` without any prefix options nothing will happen as
 `dhclient-pd` then doesn't know which prefixes to manage.
 
-If you just want to quickly show the configuration:
+To quickly show the configuration:
 
     dhclient-pd show
