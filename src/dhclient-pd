@@ -24,11 +24,9 @@ class PrefixError(Exception):
 class Interface:
     def __init__(self, name: str):
         self.name = name
+        self._addrs = set(self._get_addrs())
 
-    @cached_property
-    def _addrs(self) -> list[IPv6Interface]:
-        addrs = []
-
+    def _get_addrs(self) -> Iterator[IPv6Interface]:
         p = subprocess.run(
             ["ip", "-6", "-j", "addr", "show", self.name, "scope", "global"],
             check=True,
@@ -38,13 +36,16 @@ class Interface:
         for interface in json.loads(p.stdout):
             for addr in interface["addr_info"]:
                 if addr.get("family") == "inet6":
-                    addrs.append(IPv6Interface(f'{addr["local"]}/{addr["prefixlen"]}'))
-
-        return addrs
+                    yield IPv6Interface(f'{addr["local"]}/{addr["prefixlen"]}')
 
     @property
-    def addrs(self) -> list[IPv6Interface]:
-        return self._addrs
+    def addrs(self) -> set[IPv6Interface]:
+        """
+        Returns a shallow copy of the internal _addrs attribute. A shallow copy
+        is used so the caller don't have to worry about the set changing when
+        calling add/remove_addr while iterating over the set.
+        """
+        return self._addrs.copy()
 
     def add_addr(self, addr: IPv6Interface) -> None:
         if addr in self.addrs:
@@ -56,10 +57,7 @@ class Interface:
             ["ip", "-6", "addr", "add", addr.with_prefixlen, "dev", self.name],
             check=True,
         )
-
-        # Clear cache for _addrs to force a new lookup if needed
-        if hasattr(self, "_addrs"):
-            del self._addrs
+        self._addrs.add(addr)
 
     def remove_addr(self, addr: IPv6Interface) -> None:
         LOGGER.info("Removing address %s from %s", addr, self.name)
@@ -67,10 +65,7 @@ class Interface:
             ["ip", "-6", "addr", "del", addr.with_prefixlen, "dev", self.name],
             check=True,
         )
-
-        # Clear cache for _addrs to force a new lookup if needed
-        if hasattr(self, "_addrs"):
-            del self._addrs
+        self._addrs.remove(addr)
 
 
 class DelegatedPrefix:
@@ -161,7 +156,7 @@ def config_cmd(args):
     if args.prefix:
         LOGGER.info("Delegated prefix: %s", args.prefix)
         prefix = DelegatedPrefix(args.prefix)
-        addrs_added: set[str] = set()
+        addrs_added: set(IPv6Interface) = set()
 
         for item in config:
             prefix_cfg = PrefixConfig(**item)
@@ -173,18 +168,18 @@ def config_cmd(args):
                 prefix_cfg.interface_ids,
             ):
                 interface.add_addr(addr)
-                addrs_added.add(str(addr))
+                addrs_added.add(addr)
 
-        for _, interface in interfaces.items():
-            for addr in interface.addrs:
-                if str(addr) not in addrs_added and addr in prefix.network:
+        for interface in iter(interfaces.values()):
+            for addr in interface.addrs - addrs_added:
+                if addr in prefix.network:
                     interface.remove_addr(addr)
 
     if args.old_prefix and args.old_prefix != args.prefix:
         LOGGER.info("Old prefix: %s", args.old_prefix)
         prefix = DelegatedPrefix(args.old_prefix)
 
-        for _, interface in interfaces.items():
+        for interface in iter(interfaces.values()):
             for addr in interface.addrs:
                 if addr in prefix.network:
                     interface.remove_addr(addr)
