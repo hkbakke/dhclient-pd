@@ -117,7 +117,7 @@ class DelegatedPrefix:
         for addr in self.get_prefix_addrs(prefix_id, prefix_length, interface_ids):
             interface.add_addr(addr)
 
-    def cleanup_interface(self, interface: Interface):
+    def cleanup_interface(self, interface: Interface) -> None:
         for addr in interface.addrs - self._assigned_addrs:
             if addr in self.network:
                 interface.remove_addr(addr)
