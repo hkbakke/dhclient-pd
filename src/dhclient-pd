@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
-import hashlib
 import json
 import logging
 import subprocess
 import sys
-from functools import cached_property
 from ipaddress import IPv6Address, IPv6Network, IPv6Interface
 from typing import Iterator, Optional
 
@@ -73,6 +71,7 @@ class DelegatedPrefix:
 
     def __init__(self, prefix: str):
         self.network = IPv6Network(prefix)
+        self._assigned_addrs: set[IPv6Interface] = set()
         self._assigned_prefixes: set[int] = set()
 
     def get_prefix(self, prefix_id: str, prefix_length: int) -> IPv6Network:
@@ -94,18 +93,34 @@ class DelegatedPrefix:
 
         return prefix_network
 
-    def get_prefix_address(
-        self, prefix: IPv6Network, interface_id: str
-    ) -> IPv6Interface:
-        addr = prefix.network_address + int(IPv6Address(interface_id))
-        return IPv6Interface(f"{addr}/{prefix.prefixlen}")
+    def get_prefix_addr(self, prefix: IPv6Network, interface_id: str) -> IPv6Interface:
+        addr = IPv6Interface(
+            f"{prefix.network_address + int(IPv6Address(interface_id))}/{prefix.prefixlen}"
+        )
+        self._assigned_addrs.add(addr)
+        return addr
 
-    def get_prefix_addresses(
+    def get_prefix_addrs(
         self, prefix_id: str, prefix_length: int, interface_ids: list[str]
     ) -> Iterator[IPv6Interface]:
         prefix = self.get_prefix(prefix_id, prefix_length)
         for interface_id in interface_ids:
-            yield self.get_prefix_address(prefix, interface_id)
+            yield self.get_prefix_addr(prefix, interface_id)
+
+    def configure_interface(
+        self,
+        interface: Interface,
+        prefix_id: str,
+        prefix_length: int,
+        interface_ids: list[str],
+    ) -> None:
+        for addr in self.get_prefix_addrs(prefix_id, prefix_length, interface_ids):
+            interface.add_addr(addr)
+
+    def cleanup_interface(self, interface: Interface):
+        for addr in interface.addrs - self._assigned_addrs:
+            if addr in self.network:
+                interface.remove_addr(addr)
 
 
 class PrefixConfig:
@@ -156,33 +171,25 @@ def config_cmd(args):
     if args.prefix:
         LOGGER.info("Delegated prefix: %s", args.prefix)
         prefix = DelegatedPrefix(args.prefix)
-        addrs_added: set(IPv6Interface) = set()
 
         for item in config:
             prefix_cfg = PrefixConfig(**item)
-            interface = interfaces[prefix_cfg.name]
-
-            for addr in prefix.get_prefix_addresses(
+            prefix.configure_interface(
+                interfaces[prefix_cfg.name],
                 prefix_cfg.prefix_id,
                 prefix_cfg.prefix_length,
                 prefix_cfg.interface_ids,
-            ):
-                interface.add_addr(addr)
-                addrs_added.add(addr)
+            )
 
         for interface in iter(interfaces.values()):
-            for addr in interface.addrs - addrs_added:
-                if addr in prefix.network:
-                    interface.remove_addr(addr)
+            prefix.cleanup_interface(interface)
 
     if args.old_prefix and args.old_prefix != args.prefix:
         LOGGER.info("Old prefix: %s", args.old_prefix)
         prefix = DelegatedPrefix(args.old_prefix)
 
         for interface in iter(interfaces.values()):
-            for addr in interface.addrs:
-                if addr in prefix.network:
-                    interface.remove_addr(addr)
+            prefix.cleanup_interface(interface)
 
 
 def show_cmd(args):
