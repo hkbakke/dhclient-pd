@@ -67,8 +67,6 @@ class Interface:
 
 
 class DelegatedPrefix:
-    PREFIXLEN = 64
-
     def __init__(self, prefix: str):
         self.network = IPv6Network(prefix)
         self._assigned_addrs: set[IPv6Interface] = set()
