@@ -80,7 +80,7 @@ class DelegatedPrefix:
 
         self._assigned_prefixes.add(prefix_index)
         prefix_address = self.network.network_address + int(
-            IPv6Address(f"0:0:0:{prefix_index:x}::")
+            IPv6Address(f"::{prefix_index:x}:0:0:0:0")
         )
         prefix_network = IPv6Network(f"{prefix_address}/{prefix_length}")
 
